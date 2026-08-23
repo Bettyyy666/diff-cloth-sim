@@ -101,12 +101,17 @@ def load_panels(npz_path):
     for panel_id, name in enumerate(panel_order):
         v = d[f"{name}::v"]
         f = d[f"{name}::f"]
-        # Front/back panels are mirror images and so have opposite 2D
-        # winding; normalize every panel to positive signed area so a
-        # consistent orientation convention holds mesh-wide.
+        # Front/back panels are mirror images and so have opposite 2D signed
+        # area under the raw shoelace formula. Fix this by mirroring the
+        # panel's own 2D coordinates (an isometry: preserves edge lengths and
+        # area magnitude) rather than reversing face index order -- reversing
+        # indices instead would also flip these faces' 3D winding (since
+        # welded_faces is later derived from this same panel_indices array),
+        # inverting their outward normals relative to the rest of the mesh.
         net_area = panel_triangle_data(v, f)[1].sum()
         if net_area < 0:
-            f = f[:, [0, 2, 1]]
+            v = v.copy()
+            v[:, 0] = -v[:, 0]
         panel_indices_all.append(f + offset)
         panel_verts_all.append(v)
         face_panel_id.append(np.full(len(f), panel_id, dtype=np.int32))
@@ -367,9 +372,11 @@ def main():
     panel_verts = panel_verts * 0.01  # panels_2d.npz is in the same centimeters as target_shape.obj
 
     welded_faces = unwelded_to_welded[panel_indices]
-    assert welded_faces.shape == target_faces.shape and np.array_equal(
-        np.sort(welded_faces, axis=1), np.sort(target_faces, axis=1)
-    ), "panels_2d.npz reconstruction does not match target_shape.obj topology (as per-face vertex sets) -- aborting."
+    # Exact match, winding included: load_panels() only mirrors panel *coordinates* for
+    # negative-area panels, never reorders face indices, so 3D winding is untouched.
+    assert np.array_equal(welded_faces, target_faces), (
+        "panels_2d.npz reconstruction does not match target_shape.obj topology (including winding) -- aborting."
+    )
     assert n_welded == len(target_vertices_cm), "welded vertex count mismatch between panels_2d.npz and target_shape.obj."
 
     init_vertices = target_vertices_cm * 0.01  # cm -> m, this is q0
