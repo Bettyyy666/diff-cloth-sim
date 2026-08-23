@@ -1,0 +1,3 @@
+[submodule "garment-refitting"]
+	path = garment-refitting
+	url = https://github.com/panangam/garment-refitting.git
