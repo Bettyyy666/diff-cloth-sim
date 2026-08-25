@@ -77,6 +77,7 @@ DEFAULT_PANELS = GARMENT_DIR / "generated_rand_2E2EL4UZUS_panels_2d.npz"
 DEFAULT_SIM_PROPS = GARMENT_DIR / "sim_props.yaml"
 DEFAULT_VERTEX_LABELS = GARMENT_DIR / "generated_rand_2E2EL4UZUS_vertex_labels.yaml"
 DEFAULT_BODY = REPO_ROOT / "inputs/5000_body_shapes_and_measures/meshes/01709_straight.obj"
+DEFAULT_GROUND_TRUTH_SIM = GARMENT_DIR / "generated_rand_2E2EL4UZUS_sim.obj"
 
 
 def load_obj(path):
@@ -148,6 +149,22 @@ def average_edge_length(vertices, faces):
     edges = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]])
     lengths = np.linalg.norm(vertices[edges[:, 0]] - vertices[edges[:, 1]], axis=1)
     return float(lengths.mean())
+
+
+def resample_via_nearest_point(guide_vertices, mismatched_vertices, mismatched_faces):
+    """Map `guide_vertices` (our panel topology's vertex positions) onto the nearest point
+    on a differently-topologized mesh's surface.
+
+    Used when --target-shape has a different vertex/face count than panels_2d.npz's welded
+    topology -- e.g. a target shape built from a different remeshing/generation of the same
+    garment design, so there's no 1:1 index correspondence to exploit. `guide_vertices`
+    should be a known-good, topology-matching mesh (e.g. this garment's own ground-truth
+    sim.obj on the same body) so each query point starts already close to its true target,
+    keeping the nearest-point correspondence unambiguous.
+    """
+    mesh = trimesh.Trimesh(vertices=mismatched_vertices, faces=mismatched_faces, process=False)
+    closest_points, distances, _ = trimesh.proximity.closest_point(mesh, guide_vertices)
+    return closest_points, distances
 
 
 def push_outside_body(vertices, body_vertices, body_faces, clearance):
@@ -334,6 +351,15 @@ def main():
         "script's default converts from cm/s) tames it without needing to lower GarmentCode's tuned stiffness.",
     )
 
+    parser.add_argument(
+        "--ground-truth-sim",
+        default=str(DEFAULT_GROUND_TRUTH_SIM),
+        help="This garment's own ground-truth drape (same body, panels_2d.npz-matching topology). Used two ways: "
+        "(1) if --target-shape has a different topology than panels_2d.npz (e.g. a refit estimate built from a "
+        "different remeshing of the same design), its vertices become the nearest-point-on-surface query anchors "
+        "for resampling --target-shape onto our topology; (2) after the run, if its topology matches ours, the "
+        "final drape is compared against it as a quality check. Pass '' to disable both.",
+    )
     parser.add_argument("--use-attachments", action="store_true", help="Apply vertex_labels.yaml attachment groups as a warm-up spring-to-q0 force.")
     parser.add_argument("--timing-only", type=int, default=0)
     args = parser.parse_args()
@@ -374,12 +400,36 @@ def main():
     welded_faces = unwelded_to_welded[panel_indices]
     # Exact match, winding included: load_panels() only mirrors panel *coordinates* for
     # negative-area panels, never reorders face indices, so 3D winding is untouched.
-    assert np.array_equal(welded_faces, target_faces), (
-        "panels_2d.npz reconstruction does not match target_shape.obj topology (including winding) -- aborting."
+    topology_matches = welded_faces.shape == target_faces.shape and n_welded == len(target_vertices_cm) and np.array_equal(
+        welded_faces, target_faces
     )
-    assert n_welded == len(target_vertices_cm), "welded vertex count mismatch between panels_2d.npz and target_shape.obj."
+    ground_truth_vertices_cm = None  # loaded below if needed for resampling; reused for the final comparison
 
-    init_vertices = target_vertices_cm * 0.01  # cm -> m, this is q0
+    if topology_matches:
+        init_vertices = target_vertices_cm * 0.01  # cm -> m, this is q0
+    else:
+        # --target-shape wasn't built from this exact topology (e.g. a refit estimate from a
+        # different remeshing/generation of the same garment design) -- there's no 1:1 vertex
+        # correspondence to exploit. Resample it onto our topology by nearest-point-on-surface,
+        # using the ground-truth sim.obj (already topology-matched) as query anchors.
+        if not args.ground_truth_sim:
+            raise RuntimeError(
+                f"--target-shape ({args.target_shape}) has {target_faces.shape[0]} faces / {len(target_vertices_cm)} "
+                f"verts, but panels_2d.npz's welded topology has {welded_faces.shape[0]} faces / {n_welded} verts. "
+                "Pass --ground-truth-sim (a topology-matching mesh) to resample the mismatched target shape onto "
+                "our topology, or fix --target-shape to match panels_2d.npz directly."
+            )
+        ground_truth_vertices_cm, guide_faces = load_obj(args.ground_truth_sim)
+        assert n_welded == len(ground_truth_vertices_cm) and np.array_equal(
+            np.sort(welded_faces, axis=1), np.sort(guide_faces, axis=1)
+        ), f"--ground-truth-sim ({args.ground_truth_sim}) does not match panels_2d.npz's welded topology either."
+        resampled_cm, resample_dist_cm = resample_via_nearest_point(ground_truth_vertices_cm, target_vertices_cm, target_faces)
+        print(
+            f"--target-shape topology ({target_faces.shape[0]} faces) != panels_2d.npz topology ({welded_faces.shape[0]} "
+            f"faces); resampled q0 via nearest-point-on-surface using {args.ground_truth_sim} as query anchors "
+            f"(resample distance: mean={resample_dist_cm.mean():.3f}cm, max={resample_dist_cm.max():.3f}cm)."
+        )
+        init_vertices = resampled_cm * 0.01  # cm -> m, this is q0
 
     particle_radius = args.particle_radius
     if particle_radius is None:
@@ -489,8 +539,26 @@ def main():
         print(f"Estimated wall time for the full --num-frames {args.num_frames} run: {est_full_s:.1f}s")
     else:
         final_path = out_dir / "final_drape.obj"
-        write_obj(final_path, state_0.particle_q.numpy(), welded_faces)
+        final_vertices = state_0.particle_q.numpy()
+        write_obj(final_path, final_vertices, welded_faces)
         print(f"Final drape written to {final_path}")
+
+        if args.ground_truth_sim:
+            if ground_truth_vertices_cm is None:
+                try:
+                    gt_v_cm, gt_faces = load_obj(args.ground_truth_sim)
+                    if n_welded == len(gt_v_cm) and np.array_equal(np.sort(welded_faces, axis=1), np.sort(gt_faces, axis=1)):
+                        ground_truth_vertices_cm = gt_v_cm
+                except (OSError, ValueError):
+                    pass
+            if ground_truth_vertices_cm is not None:
+                dist = np.linalg.norm(final_vertices - ground_truth_vertices_cm * 0.01, axis=1)
+                print(
+                    f"vs ground truth ({args.ground_truth_sim}): mean={dist.mean() * 100:.2f}cm "
+                    f"median={np.median(dist) * 100:.2f}cm max={dist.max() * 100:.2f}cm"
+                )
+            else:
+                print(f"--ground-truth-sim ({args.ground_truth_sim}) topology doesn't match ours; skipped comparison.")
 
 
 if __name__ == "__main__":

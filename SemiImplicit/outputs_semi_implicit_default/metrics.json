@@ -1,0 +1,19 @@
+{
+  "pred_to_gt": {
+    "mean_cm": 1.3684160034079744,
+    "median_cm": 0.8438828633632801,
+    "p90_cm": 3.2987324682701473,
+    "max_cm": 8.887521548325086,
+    "rmse_cm": 1.9886331919129818
+  },
+  "gt_to_pred": {
+    "mean_cm": 1.0025031753117128,
+    "median_cm": 0.6159847657062523,
+    "p90_cm": 2.5903533679616513,
+    "max_cm": 5.554186559334311,
+    "rmse_cm": 1.456369548770412
+  },
+  "symmetric_mean_cm": 1.1854595893598436,
+  "centroid_offset_cm": 4.16302704826388,
+  "note": "Framework A: default garment is ~10-15cm wider than the 01709-fitted GT; a systematic looseness offset is expected and is not solver error."
+}
