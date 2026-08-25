@@ -41,7 +41,7 @@ Input decomposition (mirrors the reference sketch this script implements):
   - Material defaults:        sim_props.yaml's `sim.config.material` block
                                (GarmentCode's own warp-tuned values); override
                                via CLI if they don't suit SolverSemiImplicit.
-  - Collision body:            00614_apart.obj, static shape (body=-1).
+  - Collision body:            01709_straight.obj, static shape (body=-1).
   - Attachment (optional):     vertex_labels.yaml groups that also appear in
                                sim_props.yaml's attachment_label_names get an
                                external spring-to-q0 force
@@ -72,11 +72,11 @@ from newton.viewer import ViewerUSD
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GARMENT_DIR = REPO_ROOT / "inputs/generated_rand_2E2EL4UZUS"
-DEFAULT_TARGET_SHAPE = REPO_ROOT / "inputs/target_shape.obj"
+DEFAULT_TARGET_SHAPE = REPO_ROOT / "Refitting/outputs_refitting/default_2E2EL4UZUS_to_01709_straight.obj"
 DEFAULT_PANELS = GARMENT_DIR / "generated_rand_2E2EL4UZUS_panels_2d.npz"
 DEFAULT_SIM_PROPS = GARMENT_DIR / "sim_props.yaml"
 DEFAULT_VERTEX_LABELS = GARMENT_DIR / "generated_rand_2E2EL4UZUS_vertex_labels.yaml"
-DEFAULT_BODY = REPO_ROOT / "inputs/5000_body_shapes_and_measures/meshes/00614_apart.obj"
+DEFAULT_BODY = REPO_ROOT / "inputs/5000_body_shapes_and_measures/meshes/01709_straight.obj"
 
 
 def load_obj(path):
